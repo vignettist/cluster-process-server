@@ -15,10 +15,10 @@ def update_cluster(cluster_id):
     clusters = list(db.clusters.find({'_id': ObjectId(cluster_id)}));
 
     if (len(clusters) > 1):
-        return jsonify({'error': 'too many clusters'})
+        return jsonify({'error': 'too many clusters'}), 500
 
     if (len(clusters) == 0):
-        return jsonify({'error': 'no cluster with id'})
+        return jsonify({'error': 'no cluster with id'}), 500
 
     cluster = clusters[0]
 
@@ -50,7 +50,7 @@ def not_found(error):
 
 @app.errorhandler(500)
 def not_found(error):
-    return make_response(jsonify({'error': 'Internal server error'}), 404)
+    return make_response(jsonify({'error': 'Internal server error'}), 500)
 
 if __name__ == '__main__':
     app.run(debug=True, port=3122)
