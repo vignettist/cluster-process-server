@@ -4,6 +4,11 @@ import pymongo
 from shapely.geometry import MultiPoint
 from bson import ObjectId
 from flask import make_response
+import pandas as pd
+from sklearn import cluster as clus
+import datetime
+import numpy as np
+import copy
 
 app = Flask(__name__)
 client = pymongo.MongoClient("localhost", 3001)
@@ -43,6 +48,75 @@ def update_cluster(cluster_id):
     db.clusters.update_one({'_id': cluster['_id']}, {'$set': {'boundary': geom, 'centroid': centroid}})
 
     return jsonify({'response': 'okay'})
+
+@app.route('/split/<string:cluster_id>', methods=['GET'])
+def split_cluster(cluster_id):
+    print("splitting cluster")
+    print(cluster_id)
+
+    clusters = list(db.clusters.find({'_id': ObjectId(cluster_id)}))
+
+    if (len(clusters) > 1):
+        return jsonify({'error': 'too many clusters'}), 500
+
+    if (len(clusters) == 0):
+        return jsonify({'error': 'no cluster with id'}), 500
+
+    cluster = clusters[0]
+
+    # now do a k-means split with k=2 on this cluster
+
+    stretch_nights = 5.0
+    timescale = 12.0
+
+    cluster_df = pd.DataFrame()
+
+    time = 0
+    times = []
+    control_time = 0
+
+    for i in range(len(cluster['times'])):
+        times.append(time)
+
+        if (i < len(cluster['times'])-1):
+            current_time = cluster['times'][i]['utc_timestamp']
+
+            while (cluster['times'][i]['utc_timestamp'] - current_time).total_seconds() > (60 * 60):
+                local_time = current_time + datetime.timedelta(0, cluster['times'][i]['tz_offset'])
+
+                if (local_time.hour > 2) and (local_time.hour < 7):
+                    time += stretch_nights / timescale
+                    control_time += 1.0 / timescale
+                else:
+                    time += 1.0 / timescale
+                    control_time += 1.0/timescale
+
+                current_time += datetime.timedelta(0, 60*60)
+
+            local_time = current_time + datetime.timedelta(0, cluster['times'][i]['tz_offset'])
+
+            if (local_time.hour > 2) and (local_time.hour < 7):
+                time += stretch_nights * (cluster['times'][i+1]['utc_timestamp'] - current_time).total_seconds()/(60*60*timescale);
+                control_time += 1.0 * (cluster['times'][i+1]['utc_timestamp'] - current_time).total_seconds()/(60*60*timescale);
+            else:
+                time += 1.0 * (cluster['times'][i+1]['utc_timestamp'] - current_time).total_seconds()/(60*60*timescale);
+                control_time += 1.0 * (cluster['times'][i+1]['utc_timestamp'] - current_time).total_seconds()/(60*60*timescale);
+
+    times = np.array(times)
+    times *= (control_time / time)
+    times -= np.mean(times)
+    cluster_df['cluster_time'] = times
+
+    latlontimes = np.zeros((len(cluster['times']), 3))
+    latlontimes[:,0] = [cluster['locations']['coordinates'][i][1] for i in range(len(cluster['locations']['coordinates']))]
+    latlontimes[:,1] = [cluster['locations']['coordinates'][i][0] for i in range(len(cluster['locations']['coordinates']))]
+    latlontimes[:,2] = cluster_df['cluster_time']
+
+    cl = clus.KMeans(n_clusters=2).fit(latlontimes)
+
+    print(cl.labels_)
+
+    return jsonify({'response': 'okay'});
 
 @app.errorhandler(404)
 def not_found(error):
